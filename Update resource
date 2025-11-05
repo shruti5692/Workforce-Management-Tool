@@ -1,0 +1,51 @@
+arr1 = updateResourceLog(oldres, res);
+arr.setCreated(this.resourceService.updateResource(res));
+
+
+// --- NEW FIX: Handle rejoining scenario ---
+try {
+    Resource existing = oldres; // already fetched earlier
+
+    if (existing != null 
+        && existing.getEndDate() != null 
+        && existing.getEndDate().isBefore(LocalDate.now())
+        && (res.getStartDate().isAfter(existing.getEndDate()) 
+            || res.getEndDate() == null 
+            || res.getEndDate().isAfter(LocalDate.now()))) {
+
+        System.out.println("Rejoin detected for PSID: " + res.getPsid());
+
+        int currYear = LocalDate.now().getYear();
+        int nextYear = currYear + 1;
+
+        if (!availabilityRepository.existsAllByAvailabilityId_AvailabilityYearAndAvailabilityId_Psid(currYear, res.getPsid())) {
+            Availability availCurr = createFullAvailability(res, currYear, BigDecimal.ONE);
+            resourceService.addAvailability(availCurr);
+        }
+
+        if (!availabilityRepository.existsAllByAvailabilityId_AvailabilityYearAndAvailabilityId_Psid(nextYear, res.getPsid())) {
+            Availability availNext = createFullAvailability(res, nextYear, BigDecimal.ONE);
+            resourceService.addAvailability(availNext);
+        }
+
+        HolidayPlannerCompositeId hpcCurr = new HolidayPlannerCompositeId(res.getPsid(), currYear);
+        HolidayPlannerCompositeId hpcNext = new HolidayPlannerCompositeId(res.getPsid(), nextYear);
+
+        BigDecimal zero = BigDecimal.ZERO;
+        if (!holidayPlannerRepository.existsById(hpcCurr)) {
+            holidayPlannerRepository.save(new HolidayPlanner(hpcCurr, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero));
+        }
+        if (!holidayPlannerRepository.existsById(hpcNext)) {
+            holidayPlannerRepository.save(new HolidayPlanner(hpcNext, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero));
+        }
+
+        System.out.println("Rejoin handled successfully for: " + res.getPsid());
+    }
+} catch (Exception e) {
+    e.printStackTrace();
+    System.out.println("Error while handling rejoin logic: " + e.getMessage());
+}
+
+
+// existing code’s final line
+return arr.isCreated();
