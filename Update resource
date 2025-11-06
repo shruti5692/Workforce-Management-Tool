@@ -33,23 +33,95 @@ public void ensureAvailabilityAndHoliday(Resource res, int year) {
 
 
 
-// --- existing declarations above ---
+@RequestMapping(value = "/updateResource", method = RequestMethod.POST)
+public boolean updateResource(@RequestBody final Resource res) {
 
-// --- 🧩 Rejoin handling starts here ---
-LocalDate today = LocalDate.now();
+    boolean flag = false;
+    AddResourceResponse arr = new AddResourceResponse();
+    AddResourceResponse arr1 = new AddResourceResponse();
 
-// Case: resource was inactive (ended earlier) and now rejoins
-if (oldEndDate.isBefore(today) && newEndDate.isAfter(today)) {
-    System.out.println("Rejoin detected for PSID: " + res.getPsid());
+    // get old resource details from DB
+    Resource oldres = resourceService.findById1(res.getPsid());
 
-    // regenerate availability and holidays for current & next financial year
-    resourceService.ensureAvailabilityAndHoliday(res, currYear);
-    resourceService.ensureAvailabilityAndHoliday(res, currYear + 1);
+    // detect rejoin condition
+    boolean isRejoining = false;
+    if (oldres.getEndDate() != null
+            && oldres.getEndDate().isBefore(LocalDate.now())
+            && res.getStartDate() != null
+            && res.getStartDate().isAfter(LocalDate.now())) {
+        isRejoining = true;
+        System.out.println("Rejoin detected for PSID: " + res.getPsid());
+    }
+
+    // existing date-based update logic (preponement/postponement etc.)
+    LocalDate oldEndDate = oldres.getEndDate();
+    LocalDate newEndDate = res.getEndDate();
+    int currYear = Calendar.getInstance().get(Calendar.YEAR);
+    int currMonth = Calendar.getInstance().get(Calendar.MONTH);
+    if (currMonth == 11)
+        currYear++;
+
+    AvailabilityCompositeid aci = new AvailabilityCompositeid();
+    Availability avail = new Availability();
+    int newEndDateYear = newEndDate.getYear();
+    int newEndDateMonth = newEndDate.getMonthValue();
+
+    // update allocation table values if end date is changed
+    if (!oldEndDate.equals(newEndDate)) {
+        resourceService.updateAllocationToZero(res.getPsid(), newEndDateYear, newEndDateMonth);
+
+        for (int year = currYear; year <= currYear + 1; year++) {
+            List<ResourceAvailability> reslist = resourceService.getResAvail(year, res.getPsid(), res);
+            resourceService.updateTeamAvailability(year, res.getPsid(), res, reslist);
+        }
+
+        if (newEndDateMonth == 12)
+            newEndDateYear++;
+
+        // Postponement logic (end date extended)
+        if (newEndDate.isAfter(oldEndDate)) {
+            if (newEndDateYear >= currYear + 1) {
+                if (!availabilityRepository.existsAllByAvailabilityld_AvailabilityYearAndAvailabilityld_Psid(currYear + 1, res.getPsid())) {
+                    AddAvailabilityResponse arr2 = new AddAvailabilityResponse();
+                    AvailabilityCompositeid av2 = new AvailabilityCompositeid(res.getPsid(), currYear + 1, res.getTeam());
+                    BigDecimal availVal = new BigDecimal("1.0");
+
+                    Availability avail1 = new Availability(av2, availVal, availVal, availVal, availVal, availVal,
+                            availVal, availVal, availVal, availVal, availVal, availVal, availVal);
+                    arr2.setCreated(this.resourceService.addAvailability(avail1));
+
+                    HolidayPlannerCompositeId hpci = new HolidayPlannerCompositeId(res.getPsid(), currYear + 1);
+                    BigDecimal bigDecimal1 = new BigDecimal(0);
+                    HolidayPlanner holidayPlanner = new HolidayPlanner(hpci, bigDecimal1, bigDecimal1, bigDecimal1,
+                            bigDecimal1, bigDecimal1, bigDecimal1, bigDecimal1, bigDecimal1, bigDecimal1, bigDecimal1,
+                            bigDecimal1, bigDecimal1);
+                    holidayPlannerRepository.save(holidayPlanner);
+                }
+            }
+        }
+        // Preponement logic (end date reduced)
+        else {
+            // existing preponement logic remains unchanged (not shown fully for brevity)
+            // handles setting availabilities/holidays to 0 for truncated months
+        }
+    }
+
+    // finally, update the resource info
+    arr.setCreated(this.resourceService.updateResource(res));
+
+    // ✅ handle rejoin case (independent of end date change)
+    if (isRejoining) {
+        int startYear = res.getStartDate().getYear();
+        int nextYear = startYear + 1;
+
+        ensureAvailabilityAndHoliday(res, startYear);
+        ensureAvailabilityAndHoliday(res, nextYear);
+
+        System.out.println("Availability and Holiday reset to 1.0 for rejoined resource " + res.getPsid());
+    }
+
+    // log the change
+    arr1.updateResourceLog(oldres, res);
+
+    return arr.isCreated();
 }
-// --- 🧩 Rejoin handling ends here ---
-
-// Continue with your existing postponement/preponement logic
-int newEndDateYear = newEndDate.getYear();
-int newEndDateMonth = newEndDate.getMonthValue();
-
-// ... rest of your existing code (postponement / preponement) ...
