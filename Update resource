@@ -1,21 +1,38 @@
 public void ensureAvailabilityAndHoliday(Resource res, int year) {
-    boolean availabilityExists =
-        availabilityRepository.existsAllByAvailabilityId_AvailabilityYearAndAvailabilityId_Psid(year, res.getPsid());
-    boolean holidayExists =
-        holidayPlannerRepository.existsAllByHolidayPlannerId_HolidayYearAndHolidayPlannerId_Psid(year, res.getPsid());
+    // Check if availability for this year already exists
+    boolean exists = availabilityRepository.existsAllByAvailabilityId_AvailabilityYearAndAvailabilityId_Psid(year, res.getPsid());
+    if (!exists) {
+        System.out.println("Creating availability for PSID: " + res.getPsid() + " year: " + year);
 
-    if (!availabilityExists) {
-        BigDecimal full = new BigDecimal("1.0");
-        AvailabilityCompositeld avid = new AvailabilityCompositeld(res.getPsid(), year, res.getTeam());
-        Availability avail = new Availability(avid, full, full, full, full, full, full, full, full, full, full, full, full);
-        addAvailability(avail);  // use your existing addAvailability() service
+        // --- Create Availability (All months = 1.0) ---
+        BigDecimal availVal = new BigDecimal("1.0");
+        AvailabilityCompositeid availabilityId = new AvailabilityCompositeid(res.getPsid(), year, res.getTeam());
+
+        Availability availability = new Availability(
+                availabilityId,
+                availVal, availVal, availVal, availVal,
+                availVal, availVal, availVal, availVal,
+                availVal, availVal, availVal, availVal
+        );
+        availabilityRepository.save(availability);
     }
 
-    if (!holidayExists) {
-        HolidayPlannerCompositeld hpci = new HolidayPlannerCompositeld(res.getPsid(), year);
-        BigDecimal zero = new BigDecimal("0");
-        HolidayPlanner hp = new HolidayPlanner(hpci, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero);
-        holidayPlannerRepository.save(hp);
+    // Check if holiday planner entry exists for this year
+    HolidayPlannerCompositeId hpId = new HolidayPlannerCompositeId(res.getPsid(), year);
+    Optional<HolidayPlanner> existingHoliday = holidayPlannerRepository.findById(hpId);
+
+    if (!existingHoliday.isPresent()) {
+        System.out.println("Creating holiday planner for PSID: " + res.getPsid() + " year: " + year);
+
+        // --- Create Holiday Planner (All months = 0.0) ---
+        BigDecimal zero = BigDecimal.ZERO;
+        HolidayPlanner holidayPlanner = new HolidayPlanner(
+                hpId,
+                zero, zero, zero, zero,
+                zero, zero, zero, zero,
+                zero, zero, zero, zero
+        );
+        holidayPlannerRepository.save(holidayPlanner);
     }
 }
 
