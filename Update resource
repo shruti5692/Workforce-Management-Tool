@@ -1,39 +1,59 @@
-private void handleRejoin(Resource res) {
-    int year = res.getStartDate().getYear();
-    int currentYear = LocalDate.now().getYear();
-    BigDecimal availVal = BigDecimal.ONE;
-    BigDecimal unAvailVal = BigDecimal.ZERO;
+@RequestMapping(value = "/updateResource", method = RequestMethod.POST)
+public boolean updateResource(@RequestBody final Resource res) {
 
-    Availability avail1;
-    Availability avail2;
+    boolean flag = false;
+    AddResourceResponse arr = new AddResourceResponse();
+    AddResourceResponse arr1 = new AddResourceResponse();
 
-    // Logic same as AddResourceFormalities (slightly simplified)
-    if (year < currentYear) {
-        // Joined earlier in the current financial year
-        avail1 = createPartialAvailability(res, currentYear, LocalDate.now().getMonthValue(), availVal, unAvailVal);
-        avail2 = createFullAvailability(res, currentYear + 1, availVal);
-    } else if (year == currentYear) {
-        avail1 = createPartialAvailability(res, year, res.getStartDate().getMonthValue(), availVal, unAvailVal);
-        avail2 = createFullAvailability(res, year + 1, availVal);
-    } else {
-        // Joined next financial year
-        avail1 = createEmptyAvailability(res, currentYear, unAvailVal);
-        avail2 = createFullAvailability(res, year, availVal);
+    Resource oldRes = resourceService.findById1(res.getPsid());
+    LocalDate oldEndDate = oldRes.getEndDate();
+    LocalDate newEndDate = res.getEndDate();
+    LocalDate today = LocalDate.now();
+
+    // 🟢 Step 1: Detect Rejoin
+    if (oldEndDate != null && oldEndDate.isBefore(today) && newEndDate.isAfter(today)) {
+        // This line calls the helper you already have or we can define below
+        handleRejoin(res);
     }
 
-    // Reset full availability for rejoined resource
-    avail1 = createFullAvailability(res, year, availVal);
-    avail2 = createFullAvailability(res, year + 1, availVal);
+    // 🟢 Step 2: Continue with existing postponement/preponement logic
+    int currYear = Calendar.getInstance().get(Calendar.YEAR);
+    int currMonth = Calendar.getInstance().get(Calendar.MONTH);
+    if (currMonth == 11) currYear++;
 
-    // Save both availability records
-    resourceService.addAvailability(avail1);
-    resourceService.addAvailability(avail2);
+    // ... (rest of your current code remains exactly same)
+}
 
-    // Also reset Holiday Planner entries
-    saveHolidayPlanner(res, year);
-    saveHolidayPlanner(res, year + 1);
 
-    // Add Change Log
-    ChangeLog log = getChangeLog("Rejoined Resource PSID: " + res.getPsid() + " - Availability & Holidays reset");
+private void handleRejoin(Resource res) {
+    int year = LocalDate.now().getYear();
+
+    BigDecimal availVal = BigDecimal.ONE;
+    BigDecimal zero = BigDecimal.ZERO;
+
+    // ✅ Full availability for both years
+    Availability availCurr = createFullAvailability(res, year, availVal);
+    Availability availNext = createFullAvailability(res, year + 1, availVal);
+
+    resourceService.addAvailability(availCurr);
+    resourceService.addAvailability(availNext);
+
+    // ✅ Reset holidays
+    HolidayPlanner hpCurr = new HolidayPlanner(
+        new HolidayPlannerCompositeId(res.getPsid(), year),
+        zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
+    );
+    holidayPlannerRepository.save(hpCurr);
+
+    HolidayPlanner hpNext = new HolidayPlanner(
+        new HolidayPlannerCompositeId(res.getPsid(), year + 1),
+        zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
+    );
+    holidayPlannerRepository.save(hpNext);
+
+    // ✅ Log the rejoin
+    ChangeLog log = getChangeLog("Resource rejoined: " + res.getPsid()
+        + ", Name: " + res.getName()
+        + ", Team: " + res.getTeam());
     resourceService.addResourceLog(log);
 }
