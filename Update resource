@@ -1,59 +1,35 @@
-@RequestMapping(value = "/updateResource", method = RequestMethod.POST)
-public boolean updateResource(@RequestBody final Resource res) {
-
-    boolean flag = false;
-    AddResourceResponse arr = new AddResourceResponse();
-    AddResourceResponse arr1 = new AddResourceResponse();
-
-    Resource oldRes = resourceService.findById1(res.getPsid());
-    LocalDate oldEndDate = oldRes.getEndDate();
-    LocalDate newEndDate = res.getEndDate();
-    LocalDate today = LocalDate.now();
-
-    // 🟢 Step 1: Detect Rejoin
-    if (oldEndDate != null && oldEndDate.isBefore(today) && newEndDate.isAfter(today)) {
-        // This line calls the helper you already have or we can define below
-        handleRejoin(res);
-    }
-
-    // 🟢 Step 2: Continue with existing postponement/preponement logic
-    int currYear = Calendar.getInstance().get(Calendar.YEAR);
-    int currMonth = Calendar.getInstance().get(Calendar.MONTH);
-    if (currMonth == 11) currYear++;
-
-    // ... (rest of your current code remains exactly same)
-}
-
-
 private void handleRejoin(Resource res) {
-    int year = LocalDate.now().getYear();
+    String psid = res.getPsid();
+    int currentYear = LocalDate.now().getYear();
+    int nextYear = currentYear + 1;
 
-    BigDecimal availVal = BigDecimal.ONE;
-    BigDecimal zero = BigDecimal.ZERO;
+    // 🧹 STEP 1: Delete all old data for the resource
+    // (old allocations, availability, holidays)
+    allocationRepository.deleteAllByPsid(psid);
+    availabilityRepository.deleteAllByAvailabilityCompositeId_Psid(psid);
+    holidayPlannerRepository.deleteAllByHolidayPlannerCompositeId_Psid(psid);
 
-    // ✅ Full availability for both years
-    Availability availCurr = createFullAvailability(res, year, availVal);
-    Availability availNext = createFullAvailability(res, year + 1, availVal);
+    // 🧱 STEP 2: Recreate fresh availability for current + next year
+    Availability availCurrent = createFullAvailability(res, currentYear, BigDecimal.ONE);
+    Availability availNext = createFullAvailability(res, nextYear, BigDecimal.ONE);
+    availabilityRepository.save(availCurrent);
+    availabilityRepository.save(availNext);
 
-    resourceService.addAvailability(availCurr);
-    resourceService.addAvailability(availNext);
+    // 🌴 STEP 3: Recreate fresh holiday planner (set all months to 0)
+    saveHolidayPlanner(res, currentYear);
+    saveHolidayPlanner(res, nextYear);
 
-    // ✅ Reset holidays
-    HolidayPlanner hpCurr = new HolidayPlanner(
-        new HolidayPlannerCompositeId(res.getPsid(), year),
-        zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
-    );
-    holidayPlannerRepository.save(hpCurr);
+    // 🧑‍🤝‍🧑 STEP 4: Recreate team allocation only for the current team
+    Allocation newAlloc = new Allocation();
+    newAlloc.setPsid(psid);
+    newAlloc.setTeam(res.getTeam());
+    newAlloc.setStartDate(res.getStartDate());
+    newAlloc.setEndDate(res.getEndDate());
+    newAlloc.setAvailability(new BigDecimal("1.0"));
+    allocationRepository.save(newAlloc);
 
-    HolidayPlanner hpNext = new HolidayPlanner(
-        new HolidayPlannerCompositeId(res.getPsid(), year + 1),
-        zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
-    );
-    holidayPlannerRepository.save(hpNext);
-
-    // ✅ Log the rejoin
-    ChangeLog log = getChangeLog("Resource rejoined: " + res.getPsid()
-        + ", Name: " + res.getName()
-        + ", Team: " + res.getTeam());
+    // 🪵 STEP 5: Add change log for tracking
+    ChangeLog log = getChangeLog("Resource rejoined: " + psid + 
+                                 ". Reset previous allocations, availability, and holidays.");
     resourceService.addResourceLog(log);
 }
