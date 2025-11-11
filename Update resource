@@ -1,38 +1,42 @@
 private void handleRejoin(Resource res) {
-    int year = LocalDate.now().getYear();
-    int month = LocalDate.now().getMonthValue();
+    LocalDate rejoinDate = res.getStartDate();     // ✅ actual rejoin date
+    LocalDate oldEndDate = resourceService.findById1(res.getPsid()).getEndDate();
 
-    BigDecimal one = BigDecimal.ONE;
-    BigDecimal zero = BigDecimal.ZERO;
+    int rejoinYear = rejoinDate.getYear();
+    int rejoinMonth = rejoinDate.getMonthValue();
 
-    // --- Current Year Availability ---
-    BigDecimal[] months = new BigDecimal[12];
-    for (int i = 0; i < 12; i++)
-        months[i] = (i + 1 >= month) ? one : zero;
+    BigDecimal one = BigDecimal.ONE, zero = BigDecimal.ZERO;
 
-    AvailabilityCompositeId aidCurr = new AvailabilityCompositeId(res.getPsid(), year, res.getTeam());
-    Availability availCurr = new Availability(aidCurr,
-        months[11], months[0], months[1], months[2], months[3], months[4],
-        months[5], months[6], months[7], months[8], months[9], months[10]);
+    // 1️⃣ Zero-out availability for all teams between oldEndDate and rejoinDate
+    resourceService.getAllTeamsForPsid(res.getPsid()).forEach(team -> {
+        for (int year = oldEndDate.getYear(); year <= rejoinYear; year++) {
+            AvailabilityCompositeId aid = new AvailabilityCompositeId(res.getPsid(), year, team);
+            Availability avail = resourceService.getAvailabilityById(aid);
+            if (avail != null) {
+                resourceService.zeroOutAvailabilityBetween(avail, oldEndDate, rejoinDate);
+            }
+        }
+    });
+
+    // 2️⃣ Current-year availability = 1 only from rejoin month onward
+    AvailabilityCompositeId aidCurr = new AvailabilityCompositeId(res.getPsid(), rejoinYear, res.getTeam());
+    Availability availCurr = resourceService.createAvailabilityFromMonth(aidCurr, rejoinMonth, one);
     resourceService.addAvailability(availCurr);
 
-    // --- Next Year Full Availability ---
-    AvailabilityCompositeId aidNext = new AvailabilityCompositeId(res.getPsid(), year + 1, res.getTeam());
-    Availability availNext = new Availability(aidNext, one, one, one, one, one, one, one, one, one, one, one, one);
-    resourceService.addAvailability(availNext);
+    // 3️⃣ Next-year full availability
+    AvailabilityCompositeId aidNext = new AvailabilityCompositeId(res.getPsid(), rejoinYear + 1, res.getTeam());
+    resourceService.addAvailability(resourceService.createFullAvailability(aidNext, one));
 
-    // --- Reset Holidays for Both Years ---
-    for (int y = year; y <= year + 1; y++) {
-        HolidayPlannerCompositeId hpci = new HolidayPlannerCompositeId(res.getPsid(), y);
-        HolidayPlanner hp = new HolidayPlanner(hpci,
-            zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero);
-        holidayPlannerRepository.save(hp);
+    // 4️⃣ Reset holidays for both years
+    for (int y = rejoinYear; y <= rejoinYear + 1; y++) {
+        holidayPlannerRepository.save(resourceService.createEmptyHoliday(res.getPsid(), y));
     }
 
-    // --- Log Rejoin ---
+    // 5️⃣ Log the rejoin
     resourceService.addResourceLog(getChangeLog(
         "Resource rejoined: " + res.getPsid() +
         ", Name: " + res.getName() +
-        ", Team: " + res.getTeam()
+        ", Team: " + res.getTeam() +
+        ", Effective from: " + rejoinDate
     ));
 }
