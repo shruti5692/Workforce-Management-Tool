@@ -1,73 +1,70 @@
 private void handleRejoin(Resource res) {
     int rejoinYear = res.getStartDate().getYear();
     int rejoinMonth = res.getStartDate().getMonthValue(); // 1-12
+    String psid = res.getPsid();
+    String team = res.getTeam();
 
-    // ✅ 1. Check for a service break
-    // Note: You can pass 'oldres' from updateResource to avoid this extra fetch
-    Optional<Resource> existingRes = resourceService.findById(res.getPsid());
+    // ✅ 1. Check for a service break (same as before)
+    Optional<Resource> existingRes = resourceService.findById(psid);
     LocalDate prevEndDate = existingRes.map(Resource::getEndDate).orElse(null);
     boolean hadBreak = (prevEndDate != null && prevEndDate.isBefore(res.getStartDate()));
 
     // --- AVAILABILITY ---
 
-    // ✅ 2. Fetch & Update CURRENT Year Availability
-    AvailabilityCompositeId currentAvailId = new AvailabilityCompositeId(res.getPsid(), rejoinYear, res.getTeam());
+    // ✅ 2. Get-or-Create CURRENT Year Availability
+    AvailabilityCompositeId currentAvailId = new AvailabilityCompositeId(psid, rejoinYear, team);
     Availability availCurr = availabilityRepository.findById(currentAvailId)
-            .orElseThrow(() -> new EntityNotFoundException("Availability not found for "E + res.getPsid() + " year " + rejoinYear));
+            .orElseGet(() -> createEmptyAvailability(res, rejoinYear, BigDecimal.ZERO)); // If not found, create a new empty one
     
-    // This single call handles both partial and full-availability logic
     updateAvailabilityForRejoin(availCurr, rejoinMonth, hadBreak);
-    availabilityRepository.save(availCurr);
+    availabilityRepository.save(availCurr); // Saves new or updates existing
 
-    // ✅ 3. Fetch & Update NEXT Year Availability
-    AvailabilityCompositeId nextAvailId = new AvailabilityCompositeId(res.getPsid(), rejoinYear + 1, res.getTeam());
+    // ✅ 3. Get-or-Create NEXT Year Availability
+    AvailabilityCompositeId nextAvailId = new AvailabilityCompositeId(psid, rejoinYear + 1, team);
     Availability availNext = availabilityRepository.findById(nextAvailId)
-            .orElseThrow(() -> new EntityNotFoundException("Availability not found for " + res.getPsid() + " year " + (rejoinYear + 1)));
+            .orElseGet(() -> createEmptyAvailability(res, rejoinYear + 1, BigDecimal.ZERO)); // If not found, create a new empty one
     
-    // For the next year, they are always fully available (rejoinMonth=12, no break)
-    updateAvailabilityForRejoin(availNext, 12, false); 
-    availabilityRepository.save(availNext);
+    updateAvailabilityForRejoin(availNext, 12, false); // 12 = full year, no break
+    availabilityRepository.save(availNext); // Saves new or updates existing
 
     // --- HOLIDAYS ---
 
-    // ✅ 4. Fetch & Update CURRENT Year Holidays
-    HolidayPlannerCompositeId currentHpId = new HolidayPlannerCompositeId(res.getPsid(), rejoinYear);
+    // ✅ 4. Get-or-Create CURRENT Year Holidays
+    HolidayPlannerCompositeId currentHpId = new HolidayPlannerCompositeId(psid, rejoinYear);
     HolidayPlanner hpCurr = holidayPlannerRepository.findById(currentHpId)
-            .orElseThrow(() -> new EntityNotFoundException("HolidayPlanner not found for " + res.getPsid() + " year " + rejoinYear));
+            .orElseGet(() -> new HolidayPlanner(currentHpId, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
     
-    resetHolidays(hpCurr);
+    resetHolidays(hpCurr); // Reset to zero (is redundant for new, but safe)
     holidayPlannerRepository.save(hpCurr);
 
-    // ✅ 5. Fetch & Update NEXT Year Holidays
-    HolidayPlannerCompositeId nextHpId = new HolidayPlannerCompositeId(res.getPsid(), rejoinYear + 1);
+    // ✅ 5. Get-or-Create NEXT Year Holidays
+    HolidayPlannerCompositeId nextHpId = new HolidayPlannerCompositeId(psid, rejoinYear + 1);
     HolidayPlanner hpNext = holidayPlannerRepository.findById(nextHpId)
-            .orElseThrow(() -> new EntityNotFoundException("HolidayPlanner not found for " + res.getPsid() + " year " + (rejoinYear + 1)));
+            .orElseGet(() -> new HolidayPlanner(nextHpId, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
 
     resetHolidays(hpNext);
     holidayPlannerRepository.save(hpNext);
     
     // ✅ 6. Log rejoin event (same as your code)
-    ChangeLog log = getChangeLog("Resource rejoined: " + res.getPsid()
+    ChangeLog log = getChangeLog("Resource rejoined: " + psid
         + ", Name: " + res.getName()
-        + ", Team: " + res.getTeam()
+        + ", Team: " + team
         + ", Rejoin Date: " + res.getStartDate());
     resourceService.addResourceLog(log);
 }
 
-// --- NEW HELPER METHODS (Add these two) ---
+// --- REQUIRED HELPER METHODS ---
+// You must have these three methods available in your class.
 
 /**
  * Updates an existing Availability record for a rejoin.
- * Sets all months from the 'rejoinMonth' to 1 (available).
- * If 'hadBreak' is true, sets all prior months to 0 (unavailable).
- * If 'hadBreak' is false, sets all prior months to 1 (was already available).
+ * (This is the minimal helper from the previous step)
  */
 private void updateAvailabilityForRejoin(Availability avail, int rejoinMonth, boolean hadBreak) {
     BigDecimal one = BigDecimal.ONE;
     BigDecimal zero = BigDecimal.ZERO;
     
-    // 0=Dec, 1=Jan, 2=Feb, ..., 11=Nov
-    // We use 12 (December) to mean "the entire year"
+    // 0=Dec, 1=Jan, ... 11=Nov
     int financialMonthIndex = (rejoinMonth == 12) ? 0 : rejoinMonth;
 
     BigDecimal[] months = new BigDecimal[12];
@@ -75,11 +72,9 @@ private void updateAvailabilityForRejoin(Availability avail, int rejoinMonth, bo
         if (i >= financialMonthIndex) {
             months[i] = one; // Available from rejoin month
         } else {
-            months[i] = hadBreak ? zero : one; // If no break, they were available all along
+            months[i] = hadBreak ? zero : one; // If no break, they were available
         }
     }
-
-    // This is the unavoidable boilerplate, now in one place
     avail.setDece(months[0]); avail.setJan(months[1]); avail.setFeb(months[2]);
     avail.setMar(months[3]); avail.setApr(months[4]); avail.setMay(months[5]);
     avail.setJun(months[6]); avail.setJul(months[7]); avail.setAug(months[8]);
@@ -88,6 +83,7 @@ private void updateAvailabilityForRejoin(Availability avail, int rejoinMonth, bo
 
 /**
  * Resets all months in a HolidayPlanner to zero.
+ * (This is the minimal helper from the previous step)
  */
 private void resetHolidays(HolidayPlanner hp) {
     BigDecimal zero = BigDecimal.ZERO;
@@ -95,4 +91,13 @@ private void resetHolidays(HolidayPlanner hp) {
     hp.setMar(zero); hp.setApr(zero); hp.setMay(zero);
     hp.setJun(zero); hp.setJul(zero); hp.setAug(zero);
     hp.setSept(zero); hp.setOct(zero); hp.setNov(zero);
+}
+
+/**
+ * Creates a new, empty Availability object (all months 0).
+ * (This is from your original addResource logic).
+ */
+private Availability createEmptyAvailability(Resource res, int year, BigDecimal unAvailVal) {
+    AvailabilityCompositeId id = new AvailabilityCompositeId(res.getPsid(), year, res.getTeam());
+    return new Availability(id, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal, unAvailVal);
 }
